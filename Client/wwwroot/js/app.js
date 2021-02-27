@@ -323,6 +323,7 @@ window.App.CodeExecution = window.App.CodeExecution || (function () {
     const CACHE_NAME_PREFIX = 'blazor-repl-resources-';
     const STATIC_ASSETS_FILE_NAME = '__static-assets.json';
 
+    let _referenceAssembliesBytes = {};
     let _loadedPackageDlls = null;
     let _storedPackageFiles = {};
 
@@ -370,6 +371,52 @@ window.App.CodeExecution = window.App.CodeExecution || (function () {
     }
 
     return {
+        beginFetchingReferenceAssemblyBytes: async function (rawReferenceAssemblyName) {
+            if (!rawReferenceAssemblyName) {
+                return;
+            }
+
+            const referenceAssemblyName = BINDING.conv_string(rawReferenceAssemblyName);
+            if (!referenceAssemblyName) {
+                return;
+            }
+
+            _referenceAssembliesBytes[referenceAssemblyName] = null;
+
+            const cache = await caches.open('blazor-resources-/');
+
+            const cacheKeys = await cache.keys();
+            const referenceAssemblyCacheKey = cacheKeys.find(x => x.url.indexOf(referenceAssemblyName) > -1);
+            if (!referenceAssemblyCacheKey || !referenceAssemblyCacheKey.url) {
+                return;
+            }
+
+            console.log(referenceAssemblyCacheKey.url);
+
+            const response = await cache.match(referenceAssemblyCacheKey.url);
+            const fileBytes = new Uint8Array(await response.arrayBuffer());
+
+            _referenceAssembliesBytes[referenceAssemblyName] = fileBytes;
+        },
+        getReferenceAssembliesBytes: function () {
+            const referenceAssemblyNames = Object.getOwnPropertyNames(_referenceAssembliesBytes);
+            if (!referenceAssemblyNames.length) {
+                // Prevent endless loop on get
+                return jsArrayToDotNetArray([]);
+            }
+
+            const hasFinishedFetchingReferenceAssemblies = referenceAssemblyNames.every(n => _referenceAssembliesBytes[n]);
+            if (hasFinishedFetchingReferenceAssemblies) {
+                const referenceAssembliesBytes = referenceAssemblyNames.map(
+                    n => BINDING.js_typed_array_to_array(_referenceAssembliesBytes[n]));
+
+                console.log(referenceAssembliesBytes.length);
+
+                return jsArrayToDotNetArray(referenceAssembliesBytes);
+            }
+
+            return null;
+        },
         updateUserComponentsDll: async function (fileContent) {
             if (!fileContent) {
                 return;
@@ -424,7 +471,7 @@ window.App.CodeExecution = window.App.CodeExecution || (function () {
         },
         loadResources: async function (rawSessionId) {
             if (!rawSessionId) {
-                // Prevent endless loop on getting the loaded DLLs
+                // Prevent endless loop on get
                 _loadedPackageDlls = jsArrayToDotNetArray([]);
                 return;
             }
@@ -433,7 +480,7 @@ window.App.CodeExecution = window.App.CodeExecution || (function () {
             const cacheName = CACHE_NAME_PREFIX + sessionId;
             const cacheExists = await caches.has(cacheName);
             if (!cacheExists) {
-                // Prevent endless loop on getting the loaded DLLs
+                // Prevent endless loop on get
                 _loadedPackageDlls = jsArrayToDotNetArray([]);
                 return;
             }

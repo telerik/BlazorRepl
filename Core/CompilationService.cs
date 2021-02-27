@@ -4,6 +4,7 @@
     using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.ComponentModel.DataAnnotations;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Net.Http;
@@ -100,17 +101,16 @@
         private static readonly CSharpParseOptions CSharpParseOptions = new(LanguageVersion.Preview);
         private static readonly RazorProjectFileSystem RazorProjectFileSystem = new VirtualRazorProjectFileSystem();
 
-        private readonly HttpClient httpClient;
+        private readonly IJSUnmarshalledRuntime unmarshalledJsRuntime;
 
         // Creating the initial compilation + reading references is taking a lot of time without caching
         // so making sure it doesn't happen for each run.
         private CSharpCompilation baseCompilation;
 
-        public CompilationService(HttpClient httpClient)
+        public CompilationService(IJSUnmarshalledRuntime unmarshalledJsRuntime)
         {
             Console.WriteLine("new CompilationService");
-
-            this.httpClient = httpClient;
+            this.unmarshalledJsRuntime = unmarshalledJsRuntime;
         }
 
         public async Task InitializeAsync()
@@ -139,16 +139,17 @@
                 .Select(an => an.Name)
                 .ToHashSet();
 
-            var referenceAssemblyStreams = await GetStreamFromHttpAsync(this.httpClient, referenceAssemblyNames);
+            var sw = Stopwatch.StartNew();
+            var referenceAssembliesBytes = await this.GetReferenceAssembliesBytesAsync(referenceAssemblyNames);
+            Console.WriteLine(sw.Elapsed);
 
-            var assemblyReferences = referenceAssemblyStreams
-                .Where(a => referenceAssemblyNames.Contains(a.Key))
-                .Select(a => MetadataReference.CreateFromStream(a.Value, MetadataReferenceProperties.Assembly))
+            var referenceAssemblies = referenceAssembliesBytes
+                .Select(x => MetadataReference.CreateFromImage(x, MetadataReferenceProperties.Assembly))
                 .ToList();
 
             this.baseCompilation = CSharpCompilation.Create(
                 "BlazorRepl.UserComponents",
-                references: assemblyReferences,
+                references: referenceAssemblies,
                 options: new CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     optimizationLevel: OptimizationLevel.Release,
@@ -193,23 +194,33 @@
             return result;
         }
 
-        private static async Task<IDictionary<string, Stream>> GetStreamFromHttpAsync(
-            HttpClient httpClient,
-            IEnumerable<string> assemblyNames)
+        private async Task<IEnumerable<byte[]>> GetReferenceAssembliesBytesAsync(IEnumerable<string> referenceAssemblyNames)
         {
-            var streams = new ConcurrentDictionary<string, Stream>();
+            Console.WriteLine(referenceAssemblyNames.Count());
+            Console.WriteLine(string.Join(" | ", referenceAssemblyNames));
 
-            await Task.WhenAll(
-                assemblyNames.Select(async assemblyName =>
+            foreach (var referenceAssemblyName in referenceAssemblyNames)
+            {
+                this.unmarshalledJsRuntime.InvokeUnmarshalled<string, object>(
+                    "App.CodeExecution.beginFetchingReferenceAssemblyBytes",
+                    referenceAssemblyName);
+            }
+
+            IEnumerable<byte[]> referenceAssembliesBytes;
+            while (true)
+            {
+                referenceAssembliesBytes = this.unmarshalledJsRuntime.InvokeUnmarshalled<IEnumerable<byte[]>>(
+                    "App.CodeExecution.getReferenceAssembliesBytes");
+
+                if (referenceAssembliesBytes != null)
                 {
-                    var result = await httpClient.GetAsync($"/_framework/{assemblyName}.dll");
+                    break;
+                }
 
-                    result.EnsureSuccessStatusCode();
+                await Task.Delay(20);
+            }
 
-                    streams.TryAdd(assemblyName, await result.Content.ReadAsStreamAsync());
-                }));
-
-            return streams;
+            return referenceAssembliesBytes;
         }
 
         private static RazorProjectItem CreateRazorProjectItem(string fileName, string fileContent)
