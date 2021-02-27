@@ -386,7 +386,7 @@ window.App.CodeExecution = window.App.CodeExecution || (function () {
             const cache = await caches.open('blazor-resources-/');
 
             const cacheKeys = await cache.keys();
-            const referenceAssemblyCacheKey = cacheKeys.find(x => x.url.indexOf(referenceAssemblyName) > -1);
+            const referenceAssemblyCacheKey = cacheKeys.find(x => x.url.indexOf(referenceAssemblyName + '.dll') > -1);
             if (!referenceAssemblyCacheKey || !referenceAssemblyCacheKey.url) {
                 return;
             }
