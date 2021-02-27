@@ -134,27 +134,21 @@
                 typeof(WebAssemblyHostBuilder).Assembly, // Microsoft.AspNetCore.Components.WebAssembly
             };
 
-            var assemblyNames = referenceAssemblyRoots
-                .SelectMany(assembly => assembly.GetReferencedAssemblies().Concat(new[] { assembly.GetName() }))
-                .Select(x => x.Name)
-                .Distinct()
-                .ToList();
+            var referenceAssemblyNames = referenceAssemblyRoots
+                .SelectMany(a => a.GetReferencedAssemblies().Concat(new[] { a.GetName() }))
+                .Select(an => an.Name)
+                .ToHashSet();
 
-            var assemblyStreams = await GetStreamFromHttpAsync(this.httpClient, assemblyNames);
+            var referenceAssemblyStreams = await GetStreamFromHttpAsync(this.httpClient, referenceAssemblyNames);
 
-            var allReferenceAssemblies = assemblyStreams.ToDictionary(a => a.Key, a => MetadataReference.CreateFromStream(a.Value));
-
-            var referenceAssemblies = allReferenceAssemblies
-                .Where(a => referenceAssemblyRoots
-                    .Select(x => x.GetName().Name)
-                    .Union(referenceAssemblyRoots.SelectMany(y => y.GetReferencedAssemblies().Select(z => z.Name)))
-                    .Any(n => n == a.Key))
-                .Select(a => a.Value)
+            var assemblyReferences = referenceAssemblyStreams
+                .Where(a => referenceAssemblyNames.Contains(a.Key))
+                .Select(a => MetadataReference.CreateFromStream(a.Value, MetadataReferenceProperties.Assembly))
                 .ToList();
 
             this.baseCompilation = CSharpCompilation.Create(
                 "BlazorRepl.UserComponents",
-                references: referenceAssemblies,
+                references: assemblyReferences,
                 options: new CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     optimizationLevel: OptimizationLevel.Release,
